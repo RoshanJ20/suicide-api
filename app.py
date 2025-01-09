@@ -1,5 +1,4 @@
 import flask
-from transformers import TFBertForSequenceClassification, BertTokenizer
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import tensorflow as tf
@@ -9,25 +8,66 @@ import json
 import os
 import google.generativeai as genai
 import overpass
-
+from functools import lru_cache
 
 app = Flask(__name__)
-CORS(app)  
+CORS(app)
 
-# Load the BERT model and tokenizer
-def load_model_and_tokenizer():
-    try:
-        model_path = 'model'
-        tokenizer_path = 'tokenizer'
-        model = TFBertForSequenceClassification.from_pretrained(model_path)
-        tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
-        return model, tokenizer
-    except Exception as e:
-        print(f"Error loading model or tokenizer: {e}")
-        return None, None
+class ModelManager:
+    def __init__(self):
+        self._model = None
+        self._tokenizer = None
+        self._gemini_model = None
+    
+    @property
+    def model(self):
+        if self._model is None:
+            from transformers import TFBertForSequenceClassification
+            try:
+                model_path = 'model'
+                self._model = TFBertForSequenceClassification.from_pretrained(model_path)
+            except Exception as e:
+                print(f"Error loading model: {e}")
+                raise
+        return self._model
+    
+    @property
+    def tokenizer(self):
+        if self._tokenizer is None:
+            from transformers import BertTokenizer
+            try:
+                tokenizer_path = 'tokenizer'
+                self._tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
+            except Exception as e:
+                print(f"Error loading tokenizer: {e}")
+                raise
+        return self._tokenizer
+    
+    @property
+    def gemini_model(self):
+        if self._gemini_model is None:
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("GEMINI_API_KEY environment variable not set.")
+            genai.configure(api_key=api_key)
+            self._gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        return self._gemini_model
+    
+    def cleanup(self):
+        """Release resources when needed"""
+        if self._model is not None:
+            del self._model
+            self._model = None
+        if self._tokenizer is not None:
+            del self._tokenizer
+            self._tokenizer = None
+        if self._gemini_model is not None:
+            del self._gemini_model
+            self._gemini_model = None
 
-MODEL, TOKENIZER = load_model_and_tokenizer()
+model_manager = ModelManager()
 
+@lru_cache(maxsize=100)
 def get_geolocation(ip_address):
     try:
         response = requests.get(f'https://ipapi.co/{ip_address}/json/')
@@ -37,32 +77,20 @@ def get_geolocation(ip_address):
     except Exception as e:
         print(f"Geolocation lookup error: {e}")
         return None
-          
-def get_support_centers_from_overpass(location_info, radius=5000): 
+
+@lru_cache(maxsize=50)
+def get_support_centers_from_overpass(lat, lon, radius=5000):
     """
-    Fetches support centers near the given location using the Overpass API (GeoJSON response format).
-
-    Args:
-        location_info: A dictionary containing location information (e.g., city, region, country).
-        radius: Search radius in meters (default: 5000 meters).
-
-    Returns:
-        A list of dictionaries, where each dictionary represents a support center 
-        with keys like "name", "address", "phone", "coordinates" (if available).
+    Fetches support centers near the given location using the Overpass API.
+    Now accepts lat/lon directly for better caching.
     """
     try:
         api = overpass.API()
-
-        # Construct the Overpass QL query
-        query = f'node["amenity"~"hospital|clinic|doctors|social_facility|community_centre"](around:{radius},{location_info["latitude"]},{location_info["longitude"]});'
-
-        # Execute the query
-        result = api.get(query, responseformat="geojson")  # Ensure GeoJSON response
-        #print("result", result)
+        query = f'node["amenity"~"hospital|clinic|doctors|social_facility|community_centre"](around:{radius},{lat},{lon});'
+        result = api.get(query, responseformat="geojson")
         
-        # Extract support center information
         support_centers = []
-        for feature in result.get("features", []):  # Iterate through GeoJSON features
+        for feature in result.get("features", []):
             properties = feature.get("properties", {})
             tags = properties.get("tags", {})
             geometry = feature.get("geometry", {})
@@ -73,7 +101,7 @@ def get_support_centers_from_overpass(location_info, radius=5000):
                 "phone": tags.get("phone"),
                 "email": tags.get("email"),
                 "website": tags.get("website"),
-                "coordinates": geometry.get("coordinates")  # Longitude, Latitude
+                "coordinates": geometry.get("coordinates")
             }
             support_centers.append(center)
 
@@ -82,30 +110,11 @@ def get_support_centers_from_overpass(location_info, radius=5000):
     except Exception as e:
         print(f"Error fetching support centers from Overpass: {e}")
         return []
-    
+
 def get_gemini_response(prompt):
-    """
-    Fetches a response from the Gemini API using the provided prompt.
-
-    Args:
-      prompt: The input prompt for the Gemini model.
-
-    Returns:
-      The text response generated by the Gemini model, or None if error occurs.
-    """
-    # Get API key from environment variable
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable not set.")
-
-    # Configure the Gemini API client
-    genai.configure(api_key=api_key)
-
-    # Create a Gemini model instance
-    model = genai.GenerativeModel("gemini-1.5-flash")
-
+    """Fetches a response from the Gemini API using the provided prompt."""
     try:
-        response = model.generate_content(prompt)
+        response = model_manager.gemini_model.generate_content(prompt)
         return response.text
     except Exception as e:
         print(f"Error calling Gemini API: {e}")
@@ -118,55 +127,59 @@ def serve_frontend():
 @app.route('/predict', methods=['POST'])
 def predict_suicide_risk():
     try:
-        # Validate input
         input_text = request.json.get('text', '').strip()
         if not input_text:
             return jsonify({
                 "error": "Invalid input. Please provide a non-empty text for prediction."
             }), 400
 
-        # Preprocess text
-        inputs = TOKENIZER(input_text, return_tensors="tf", padding=True, truncation=True, max_length=512)
+        # Lazy load and use models
+        inputs = model_manager.tokenizer(
+            input_text, 
+            return_tensors="tf", 
+            padding=True, 
+            truncation=True, 
+            max_length=512
+        )
 
-        # BERT model prediction
-        logits = MODEL(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
+        logits = model_manager.model(
+            inputs["input_ids"], 
+            attention_mask=inputs["attention_mask"]
+        ).logits
         probabilities = tf.nn.softmax(logits, axis=1).numpy()
-        bert_risk_score = float(probabilities[0][1])  # Probability of positive class
+        bert_risk_score = float(probabilities[0][1])
 
-        # Gemini API call
-        gemini_response = get_gemini_response(f"Analyze the following text for potential suicide ideation: '{input_text}'. Reply with only a float value, with a risk score between 0 and 1") 
+        gemini_response = get_gemini_response(
+            f"Analyze the following text for potential suicide ideation: '{input_text}'. "
+            "Reply with only a float value, with a risk score between 0 and 1"
+        )
+        
         try:
-            gemini_risk_score = float(gemini_response) 
-        except ValueError:
+            gemini_risk_score = float(gemini_response)
+        except (ValueError, TypeError):
             print(f"Error parsing Gemini response: {gemini_response}")
             gemini_risk_score = 0.0
 
-        # Weighted average with higher priority to Gemini
-        weight_gemini = 0.8  # Adjust this weight as needed
-        weight_bert = 0.2 
+        weight_gemini = 0.8
+        weight_bert = 0.2
         combined_risk_score = (gemini_risk_score * weight_gemini) + (bert_risk_score * weight_bert)
 
-        # Geolocation lookup
         ip_address = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr
-        #ip_address = "195.55.252.18"
-        #print("Ip",ip_address)
         location_info = get_geolocation(ip_address)
-        #location_info = {'ip': '195.55.252.18', 'network': '195.55.240.0/20', 'version': 'IPv4', 'city': 'Aguilas', 'region': 'Murcia', 'region_code': 'MC', 'country': 'ES', 'country_name': 'Spain', 'country_code': 'ES', 'country_code_iso3': 'ESP', 'country_capital': 'Madrid', 'country_tld': '.es', 'continent_code': 'EU', 'in_eu': True, 'postal': '30880', 'latitude': 37.4056, 'longitude': -1.5772, 'timezone': 'Europe/Madrid', 'utc_offset': '+0100', 'country_calling_code': '+34', 'currency': 'EUR', 'currency_name': 'Euro', 'languages': 'es-ES,ca,gl,eu,oc', 'country_area': 504782.0, 'country_population': 46723749, 'asn': 'AS3352', 'org': 'Telefonica De Espana S.a.u.'}
-        #print("Location: ", location_info['city'])
 
-        # Fetch support centers if high risk
         support_centers = []
         if combined_risk_score > 0.7 and location_info:
-            support_centers = get_support_centers_from_overpass(location_info)
-        
-        print(support_centers)
+            support_centers = get_support_centers_from_overpass(
+                location_info['latitude'],
+                location_info['longitude']
+            )
 
         response = {
             "risk_score": combined_risk_score,
             "is_high_risk": combined_risk_score > 0.5,
             "bert_risk_score": bert_risk_score,
             "gemini_risk_score": gemini_risk_score,
-            "support_centers": support_centers,  # Include all the support centers
+            "support_centers": support_centers,
         }
 
         return jsonify(response), 200
@@ -176,11 +189,15 @@ def predict_suicide_risk():
             "error": str(e),
             "message": "An error occurred during prediction"
         }), 500
-    00
 
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"}), 200
+
+# Cleanup handler
+@app.teardown_appcontext
+def cleanup_resources(exception=None):
+    model_manager.cleanup()
 
 if __name__ == '__main__':
     app.run(debug=True)
