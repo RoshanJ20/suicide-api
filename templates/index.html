@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Suicide Risk Assessment</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            background-color: #f4f4f4;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            margin-bottom: 15px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        }
+        .high-risk {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Suicide Risk Assessment</h1>
+        <form id="riskForm">
+            <textarea 
+                id="textInput" 
+                placeholder="Enter text for assessment. Please be honest and detailed."
+                required
+            ></textarea>
+            <button type="submit">Check Risk</button>
+        </form>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('riskForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const textInput = document.getElementById('textInput').value;
+            const resultDiv = document.getElementById('result');
+
+            try {
+                const response = await fetch('http://localhost:5000/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text: textInput }),
+                });
+
+                const data = await response.json();
+
+                let resultHTML = `
+                    <h2>Assessment Results</h2>
+                    <p>Risk Score: ${data.risk_score.toFixed(4)}</p>
+                    <p class="${data.is_high_risk ? 'high-risk' : ''}">
+                        Risk Level: ${data.is_high_risk ? 'High Risk' : 'Low Risk'}
+                    </p>
+                    <h3>Location Details</h3>
+                    <p>City: ${data.location.city}</p>
+                    <p>Region: ${data.location.region}</p>
+                    <p>Country: ${data.location.country}</p>
+                `;
+
+                if (data.is_high_risk) {
+                    resultHTML += `
+                        <div style="color: red; margin-top: 15px;">
+                            <strong>Important:</strong> 
+                            Based on the assessment, professional support is recommended.
+                            Please reach out to a mental health professional or a crisis helpline.
+                        </div>
+                    `;
+                }
+
+                resultDiv.innerHTML = resultHTML;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p style="color: red;">
+                        An error occurred while processing your request. 
+                        Please try again later.
+                    </p>
+                `;
+                console.error('Error:', error);
+            }
+        });
+    </script>
+</body>
+</html>
