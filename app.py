@@ -9,39 +9,57 @@ import os
 import google.generativeai as genai
 import overpass
 from functools import lru_cache
+import signal
+import threading
+from contextlib import contextmanager
 
 app = Flask(__name__)
 CORS(app)
+
+class TimeoutException(Exception):
+    pass
+
+@contextmanager
+def timeout(seconds):
+    """Context manager for timeout handling"""
+    def handler(signum, frame):
+        raise TimeoutException("Operation timed out")
+
+    # Set the timeout handler
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        # Disable the alarm
+        signal.alarm(0)
 
 class ModelManager:
     def __init__(self):
         self._model = None
         self._tokenizer = None
         self._gemini_model = None
-    
-    @property
-    def model(self):
-        if self._model is None:
-            from transformers import TFBertForSequenceClassification
-            try:
-                model_path = 'model'
-                self._model = TFBertForSequenceClassification.from_pretrained(model_path)
-            except Exception as e:
-                print(f"Error loading model: {e}")
-                raise
-        return self._model
-    
-    @property
-    def tokenizer(self):
-        if self._tokenizer is None:
-            from transformers import BertTokenizer
-            try:
-                tokenizer_path = 'tokenizer'
-                self._tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
-            except Exception as e:
-                print(f"Error loading tokenizer: {e}")
-                raise
-        return self._tokenizer
+        self._model_lock = threading.Lock()
+        self._tokenizer_lock = threading.Lock()
+        
+    def load_bert_with_timeout(self, timeout_seconds=10):
+        """Attempt to load BERT model with timeout"""
+        try:
+            with timeout(timeout_seconds):
+                with self._model_lock:  # Thread-safe loading
+                    if self._model is None:
+                        from transformers import TFBertForSequenceClassification
+                        model_path = 'model'
+                        self._model = TFBertForSequenceClassification.from_pretrained(model_path)
+                with self._tokenizer_lock:  # Thread-safe loading
+                    if self._tokenizer is None:
+                        from transformers import BertTokenizer
+                        tokenizer_path = 'tokenizer'
+                        self._tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
+                return True
+        except (TimeoutException, Exception) as e:
+            print(f"Error loading BERT model: {e}")
+            return False
     
     @property
     def gemini_model(self):
@@ -53,14 +71,37 @@ class ModelManager:
             self._gemini_model = genai.GenerativeModel("gemini-1.5-flash")
         return self._gemini_model
     
+    def get_bert_prediction(self, text):
+        """Get BERT model prediction with timeout"""
+        try:
+            with timeout(5):  # 5 second timeout for prediction
+                inputs = self._tokenizer(
+                    text,
+                    return_tensors="tf",
+                    padding=True,
+                    truncation=True,
+                    max_length=512
+                )
+                logits = self._model(
+                    inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"]
+                ).logits
+                probabilities = tf.nn.softmax(logits, axis=1).numpy()
+                return float(probabilities[0][1])
+        except (TimeoutException, Exception) as e:
+            print(f"Error getting BERT prediction: {e}")
+            return None
+    
     def cleanup(self):
         """Release resources when needed"""
-        if self._model is not None:
-            del self._model
-            self._model = None
-        if self._tokenizer is not None:
-            del self._tokenizer
-            self._tokenizer = None
+        with self._model_lock:
+            if self._model is not None:
+                del self._model
+                self._model = None
+        with self._tokenizer_lock:
+            if self._tokenizer is not None:
+                del self._tokenizer
+                self._tokenizer = None
         if self._gemini_model is not None:
             del self._gemini_model
             self._gemini_model = None
@@ -80,10 +121,6 @@ def get_geolocation(ip_address):
 
 @lru_cache(maxsize=50)
 def get_support_centers_from_overpass(lat, lon, radius=5000):
-    """
-    Fetches support centers near the given location using the Overpass API.
-    Now accepts lat/lon directly for better caching.
-    """
     try:
         api = overpass.API()
         query = f'node["amenity"~"hospital|clinic|doctors|social_facility|community_centre"](around:{radius},{lat},{lon});'
@@ -133,22 +170,15 @@ def predict_suicide_risk():
                 "error": "Invalid input. Please provide a non-empty text for prediction."
             }), 400
 
-        # Lazy load and use models
-        inputs = model_manager.tokenizer(
-            input_text, 
-            return_tensors="tf", 
-            padding=True, 
-            truncation=True, 
-            max_length=512
-        )
+        # Try to load BERT model with timeout
+        bert_available = model_manager.load_bert_with_timeout(timeout_seconds=10)
+        bert_risk_score = None
+        
+        if bert_available:
+            # Try to get BERT prediction with timeout
+            bert_risk_score = model_manager.get_bert_prediction(input_text)
 
-        logits = model_manager.model(
-            inputs["input_ids"], 
-            attention_mask=inputs["attention_mask"]
-        ).logits
-        probabilities = tf.nn.softmax(logits, axis=1).numpy()
-        bert_risk_score = float(probabilities[0][1])
-
+        # Get Gemini prediction
         gemini_response = get_gemini_response(
             f"Analyze the following text for potential suicide ideation: '{input_text}'. "
             "Reply with only a float value, with a risk score between 0 and 1"
@@ -160,15 +190,20 @@ def predict_suicide_risk():
             print(f"Error parsing Gemini response: {gemini_response}")
             gemini_risk_score = 0.0
 
-        weight_gemini = 0.8
-        weight_bert = 0.2
-        combined_risk_score = (gemini_risk_score * weight_gemini) + (bert_risk_score * weight_bert)
+        # Calculate combined risk score based on available models
+        if bert_risk_score is not None:
+            weight_gemini = 0.8
+            weight_bert = 0.2
+            combined_risk_score = (gemini_risk_score * weight_gemini) + (bert_risk_score * weight_bert)
+        else:
+            # Use only Gemini score if BERT is unavailable
+            combined_risk_score = gemini_risk_score
 
         ip_address = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr
-        print("IP Incoming:", ip_address)
+        print("IP Address", ip_address)
         location_info = get_geolocation(ip_address)
-        print("Location Info", location_info)
-
+        print("Location:", location_info)
+        
         support_centers = []
         if combined_risk_score > 0.7 and location_info:
             support_centers = get_support_centers_from_overpass(
@@ -179,8 +214,9 @@ def predict_suicide_risk():
         response = {
             "risk_score": combined_risk_score,
             "is_high_risk": combined_risk_score > 0.5,
-            "bert_risk_score": bert_risk_score,
+            "bert_risk_score": bert_risk_score if bert_risk_score is not None else "unavailable",
             "gemini_risk_score": gemini_risk_score,
+            "model_status": "hybrid" if bert_risk_score is not None else "gemini_only",
             "support_centers": support_centers,
         }
 
