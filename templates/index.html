@@ -81,14 +81,7 @@
 
                 let resultHTML = `
                     <h2>Assessment Results</h2>
-                    <p>Risk Score: ${data.risk_score.toFixed(4)}</p>
-                    <p class="${data.is_high_risk ? 'high-risk' : ''}">
-                        Risk Level: ${data.is_high_risk ? 'High Risk' : 'Low Risk'}
-                    </p>
-                    <h3>Location Details</h3>
-                    <p>City: ${data.location.city}</p>
-                    <p>Region: ${data.location.region}</p>
-                    <p>Country: ${data.location.country}</p>
+                    <p>Risk Score: ${data.risk_score}</p>
                 `;
 
                 if (data.is_high_risk) {
