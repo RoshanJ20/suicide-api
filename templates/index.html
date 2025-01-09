@@ -81,8 +81,38 @@
 
                 let resultHTML = `
                     <h2>Assessment Results</h2>
-                    <p>Risk Score: ${data.risk_score}</p>
+                    <p><strong>Risk Score:</strong> ${data.risk_score}</p>
+                    <p><strong>High Risk:</strong> ${data.is_high_risk ? 'Yes' : 'No'}</p>
+                    <p><strong>BERT Risk Score:</strong> ${data.bert_risk_score}</p>
+                    <p><strong>Gemini Risk Score:</strong> ${data.gemini_risk_score}</p>
+                    
+                    <h3>Support Centers</h3>
+                    <ul>
                 `;
+
+                if (data.support_centers && data.support_centers.length > 0) {
+                    data.support_centers.forEach(center => {
+                        resultHTML += `
+                            <li>
+                                <strong>Name:</strong> ${center.name || 'Unknown'}<br>
+                                <strong>Address:</strong> ${center.address || 'N/A'}<br>
+                                <strong>Phone:</strong> ${center.phone || 'N/A'}<br>
+                                <strong>Email:</strong> ${center.email || 'N/A'}<br>
+                                <strong>Website:</strong> ${center.website ? `<a href="${center.website}" target="_blank">${center.website}</a>` : 'N/A'}<br>
+                                <strong>Coordinates:</strong> ${center.coordinates ? center.coordinates.join(', ') : 'N/A'}
+                            </li>
+                        `;
+                    });
+                } else {
+                    resultHTML += `
+                        <p>No support centers found.</p>
+                    `;
+                }
+
+                resultHTML += `
+                    </ul>
+                `;
+
 
                 if (data.is_high_risk) {
                     resultHTML += `
