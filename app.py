@@ -9,30 +9,45 @@ import os
 import google.generativeai as genai
 import overpass
 from functools import lru_cache
-import signal
 import threading
-from contextlib import contextmanager
+import concurrent.futures
+from threading import Thread, Event
 
 app = Flask(__name__)
 CORS(app)
 
-class TimeoutException(Exception):
-    pass
+class ThreadWithResult(Thread):
+    def __init__(self, group=None, target=None, name=None, args=(), kwargs={}):
+        Thread.__init__(self, group, target, name, args, kwargs)
+        self._return = None
+        self._error = None
 
-@contextmanager
-def timeout(seconds):
-    """Context manager for timeout handling"""
-    def handler(signum, frame):
-        raise TimeoutException("Operation timed out")
+    def run(self):
+        if self._target is not None:
+            try:
+                self._return = self._target(*self._args, **self._kwargs)
+            except Exception as e:
+                self._error = e
 
-    # Set the timeout handler
-    signal.signal(signal.SIGALRM, handler)
-    signal.alarm(seconds)
+    def join(self, timeout=None):
+        Thread.join(self, timeout)
+        if self._error is not None:
+            raise self._error
+        return self._return
+
+def run_with_timeout(func, args=(), kwargs={}, timeout=10):
+    """Run a function with timeout using Thread"""
+    thread = ThreadWithResult(target=func, args=args, kwargs=kwargs)
+    thread.daemon = True  # Daemon thread will be killed when main thread exits
+    thread.start()
     try:
-        yield
+        return thread.join(timeout=timeout)
+    except Exception as e:
+        return None
     finally:
-        # Disable the alarm
-        signal.alarm(0)
+        # The thread will be terminated when the main thread exits
+        # since it's a daemon thread
+        pass
 
 class ModelManager:
     def __init__(self):
@@ -41,25 +56,57 @@ class ModelManager:
         self._gemini_model = None
         self._model_lock = threading.Lock()
         self._tokenizer_lock = threading.Lock()
-        
+    
+    def _load_bert(self):
+        """Internal method to load BERT model and tokenizer"""
+        try:
+            with self._model_lock:
+                if self._model is None:
+                    from transformers import TFBertForSequenceClassification
+                    model_path = 'model'
+                    self._model = TFBertForSequenceClassification.from_pretrained(model_path)
+            
+            with self._tokenizer_lock:
+                if self._tokenizer is None:
+                    from transformers import BertTokenizer
+                    tokenizer_path = 'tokenizer'
+                    self._tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
+            return True
+        except Exception as e:
+            print(f"Error in _load_bert: {e}")
+            return False
+
     def load_bert_with_timeout(self, timeout_seconds=10):
         """Attempt to load BERT model with timeout"""
+        return run_with_timeout(self._load_bert, timeout=timeout_seconds)
+
+    def _get_bert_prediction(self, text):
+        """Internal method for BERT prediction"""
         try:
-            with timeout(timeout_seconds):
-                with self._model_lock:  # Thread-safe loading
-                    if self._model is None:
-                        from transformers import TFBertForSequenceClassification
-                        model_path = 'model'
-                        self._model = TFBertForSequenceClassification.from_pretrained(model_path)
-                with self._tokenizer_lock:  # Thread-safe loading
-                    if self._tokenizer is None:
-                        from transformers import BertTokenizer
-                        tokenizer_path = 'tokenizer'
-                        self._tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
-                return True
-        except (TimeoutException, Exception) as e:
-            print(f"Error loading BERT model: {e}")
-            return False
+            inputs = self._tokenizer(
+                text,
+                return_tensors="tf",
+                padding=True,
+                truncation=True,
+                max_length=512
+            )
+            logits = self._model(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"]
+            ).logits
+            probabilities = tf.nn.softmax(logits, axis=1).numpy()
+            return float(probabilities[0][1])
+        except Exception as e:
+            print(f"Error in _get_bert_prediction: {e}")
+            return None
+
+    def get_bert_prediction(self, text, timeout_seconds=5):
+        """Get BERT prediction with timeout"""
+        return run_with_timeout(
+            self._get_bert_prediction,
+            args=(text,),
+            timeout=timeout_seconds
+        )
     
     @property
     def gemini_model(self):
@@ -70,27 +117,6 @@ class ModelManager:
             genai.configure(api_key=api_key)
             self._gemini_model = genai.GenerativeModel("gemini-1.5-flash")
         return self._gemini_model
-    
-    def get_bert_prediction(self, text):
-        """Get BERT model prediction with timeout"""
-        try:
-            with timeout(5):  # 5 second timeout for prediction
-                inputs = self._tokenizer(
-                    text,
-                    return_tensors="tf",
-                    padding=True,
-                    truncation=True,
-                    max_length=512
-                )
-                logits = self._model(
-                    inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"]
-                ).logits
-                probabilities = tf.nn.softmax(logits, axis=1).numpy()
-                return float(probabilities[0][1])
-        except (TimeoutException, Exception) as e:
-            print(f"Error getting BERT prediction: {e}")
-            return None
     
     def cleanup(self):
         """Release resources when needed"""
@@ -176,7 +202,7 @@ def predict_suicide_risk():
         
         if bert_available:
             # Try to get BERT prediction with timeout
-            bert_risk_score = model_manager.get_bert_prediction(input_text)
+            bert_risk_score = model_manager.get_bert_prediction(input_text, timeout_seconds=5)
 
         # Get Gemini prediction
         gemini_response = get_gemini_response(
@@ -200,10 +226,8 @@ def predict_suicide_risk():
             combined_risk_score = gemini_risk_score
 
         ip_address = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr
-        print("IP Address", ip_address)
         location_info = get_geolocation(ip_address)
-        print("Location:", location_info)
-        
+
         support_centers = []
         if combined_risk_score > 0.7 and location_info:
             support_centers = get_support_centers_from_overpass(
