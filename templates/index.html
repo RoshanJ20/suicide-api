@@ -36,6 +36,10 @@
         button:hover {
             background-color: #0056b3;
         }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
         #result {
             margin-top: 20px;
             padding: 15px;
@@ -60,6 +64,19 @@
             border-radius: 4px;
             border: 1px solid #ddd;
         }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 10px 0;
+        }
+        .error-message {
+            color: red;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid red;
+            border-radius: 4px;
+            background-color: #ffe6e6;
+        }
     </style>
 </head>
 <body>
@@ -71,21 +88,38 @@
                 placeholder="Enter text for assessment. Please be honest and detailed."
                 required
             ></textarea>
-            <button type="submit">Check Risk</button>
+            <button type="submit" id="submitButton">Check Risk</button>
+            <div id="loading" class="loading">Processing...</div>
         </form>
         <div id="result"></div>
         <div id="map"></div>
     </div>
 
     <script>
-        document.getElementById('riskForm').addEventListener('submit', async (e) => {
+        // Determine API URL based on environment
+        const API_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:5000'
+            : window.location.origin;
+
+        const form = document.getElementById('riskForm');
+        const submitButton = document.getElementById('submitButton');
+        const loadingDiv = document.getElementById('loading');
+        const resultDiv = document.getElementById('result');
+        const mapDiv = document.getElementById('map');
+
+        form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            
+            // Disable form and show loading state
+            submitButton.disabled = true;
+            loadingDiv.style.display = 'block';
+            resultDiv.innerHTML = '';
+            mapDiv.innerHTML = '';
+
             const textInput = document.getElementById('textInput').value;
-            const resultDiv = document.getElementById('result');
-            const mapDiv = document.getElementById('map');
 
             try {
-                const response = await fetch('http://localhost:5000/predict', {
+                const response = await fetch(`${API_URL}/predict`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -93,14 +127,16 @@
                     body: JSON.stringify({ text: textInput }),
                 });
 
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 const data = await response.json();
 
                 let resultHTML = `
                     <h2>Assessment Results</h2>
-                    <p><strong>Risk Score:</strong> ${data.risk_score}</p>
-                    <p><strong>High Risk:</strong> ${data.is_high_risk ? 'Yes' : 'No'}</p>
-                    <p><strong>BERT Risk Score:</strong> ${data.bert_risk_score}</p>
-                    <p><strong>Gemini Risk Score:</strong> ${data.gemini_risk_score}</p>
+                    <p><strong>Risk Score:</strong> ${(data.risk_score * 100).toFixed(1)}%</p>
+                    <p><strong>Risk Level:</strong> ${data.is_high_risk ? '<span class="high-risk">High</span>' : 'Low'}</p>
                 `;
 
                 if (data.is_high_risk) {
@@ -116,57 +152,73 @@
                 // Generate dropdown for support centers
                 if (data.support_centers && data.support_centers.length > 0) {
                     resultHTML += `
-                        <h3>Support Centers</h3>
+                        <h3>Nearby Support Centers</h3>
                         <label for="supportCenterSelect">Select a Support Center:</label>
                         <select id="supportCenterSelect">
                             ${data.support_centers.map((center, index) => `
                                 <option value="${index}">
-                                    ${center.name || 'Unknown'} - ${center.address || 'N/A'}
+                                    ${center.name || 'Unknown'} ${center.address ? `- ${center.address}` : ''}
                                 </option>
                             `).join('')}
                         </select>
                     `;
-                } else {
+
+                    // Add center details section
+                    resultHTML += '<div id="centerDetails"></div>';
+                } else if (data.is_high_risk) {
                     resultHTML += `
-                        <p>No support centers found.</p>
+                        <p>No local support centers found in your area. 
+                        Please call your country's emergency services or suicide prevention hotline.</p>
                     `;
                 }
 
                 resultDiv.innerHTML = resultHTML;
 
-                // Handle map rendering based on dropdown selection
+                // Handle map rendering and center details
                 if (data.support_centers && data.support_centers.length > 0) {
                     const supportCenterSelect = document.getElementById('supportCenterSelect');
-                    const initialCenter = data.support_centers[0];
-
-                    // Render initial map
-                    mapDiv.innerHTML = `
-                        <iframe
-                            src="https://www.google.com/maps?q=${initialCenter.coordinates[1]},${initialCenter.coordinates[0]}&z=15&output=embed"
-                            allowfullscreen
-                        ></iframe>
-                    `;
-
-                    // Update map when selection changes
-                    supportCenterSelect.addEventListener('change', (event) => {
-                        const selectedIndex = event.target.value;
-                        const selectedCenter = data.support_centers[selectedIndex];
+                    const centerDetailsDiv = document.getElementById('centerDetails');
+                    
+                    function updateCenterDetails(center) {
+                        let detailsHTML = '<div style="margin-top: 15px;">';
+                        if (center.phone) detailsHTML += `<p><strong>Phone:</strong> ${center.phone}</p>`;
+                        if (center.email) detailsHTML += `<p><strong>Email:</strong> ${center.email}</p>`;
+                        if (center.website) detailsHTML += `<p><strong>Website:</strong> <a href="${center.website}" target="_blank">${center.website}</a></p>`;
+                        detailsHTML += '</div>';
+                        
+                        centerDetailsDiv.innerHTML = detailsHTML;
+                        
                         mapDiv.innerHTML = `
                             <iframe
-                                src="https://www.google.com/maps?q=${selectedCenter.coordinates[1]},${selectedCenter.coordinates[0]}&z=15&output=embed"
+                                src="https://www.google.com/maps?q=${center.coordinates[1]},${center.coordinates[0]}&z=15&output=embed"
                                 allowfullscreen
                             ></iframe>
                         `;
+                    }
+
+                    // Initialize with first center
+                    updateCenterDetails(data.support_centers[0]);
+
+                    // Update when selection changes
+                    supportCenterSelect.addEventListener('change', (event) => {
+                        const selectedCenter = data.support_centers[event.target.value];
+                        updateCenterDetails(selectedCenter);
                     });
                 }
+
             } catch (error) {
                 resultDiv.innerHTML = `
-                    <p style="color: red;">
+                    <div class="error-message">
                         An error occurred while processing your request. 
                         Please try again later.
-                    </p>
+                        ${error.message ? `<br>Error: ${error.message}` : ''}
+                    </div>
                 `;
                 console.error('Error:', error);
+            } finally {
+                // Re-enable form and hide loading state
+                submitButton.disabled = false;
+                loadingDiv.style.display = 'none';
             }
         });
     </script>

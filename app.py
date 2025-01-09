@@ -167,7 +167,7 @@ def predict_suicide_risk():
         ip_address = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr
         print("IP Incoming:", ip_address)
         location_info = get_geolocation(ip_address)
-        print("Location Info", location_info['city'])
+        print("Location Info", location_info)
 
         support_centers = []
         if combined_risk_score > 0.7 and location_info:
