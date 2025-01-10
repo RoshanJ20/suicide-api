@@ -120,10 +120,12 @@ class ModelManager:
     
     def cleanup(self):
         """Release resources when needed"""
+        # Always acquire _model_lock first
         with self._model_lock:
             if self._model is not None:
                 del self._model
                 self._model = None
+        # Then acquire _tokenizer_lock
         with self._tokenizer_lock:
             if self._tokenizer is not None:
                 del self._tokenizer
@@ -131,7 +133,7 @@ class ModelManager:
         if self._gemini_model is not None:
             del self._gemini_model
             self._gemini_model = None
-
+        
 model_manager = ModelManager()
 
 @lru_cache(maxsize=100)
