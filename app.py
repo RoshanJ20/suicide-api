@@ -136,10 +136,12 @@ model_manager = ModelManager()
 @lru_cache(maxsize=100)
 async def get_geolocation(ip_address: str) -> Optional[Dict[str, Any]]:
     try:
+        abstract_api_key = os.environ.get("ABSTRACT_API_KEY")
         response = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: requests.get(f'https://ipapi.co/{ip_address}/json/')
+            lambda: requests.get(f"https://ipgeolocation.abstractapi.com/v1/?api_key={abstract_api_key}&ip_address={ip_address}")
         )
+        print(response.json())
         if response.status_code == 200:
             return response.json()
         return None
