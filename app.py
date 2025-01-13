@@ -29,6 +29,7 @@ app.add_middleware(
 
 class PredictionRequest(BaseModel):
     text: str
+    location_consent: bool
 
 class ModelManager:
     def __init__(self):
@@ -211,6 +212,8 @@ async def serve_frontend():
 async def predict_suicide_risk(request: PredictionRequest, client_ip: str = Depends(get_client_ip)):
     try:
         input_text = request.text.strip()
+        location_consent = request.location_consent
+        
         if not input_text:
             raise HTTPException(status_code=400, detail="Invalid input. Please provide non-empty text.")
 
@@ -241,9 +244,9 @@ async def predict_suicide_risk(request: PredictionRequest, client_ip: str = Depe
         else:
             combined_risk_score = gemini_risk_score
 
-        # Get geolocation data and support centers if risk is high
+        # Only get geolocation data if user consented
         support_centers = []
-        if combined_risk_score > 0.5:
+        if location_consent and combined_risk_score > 0.5:
             geo_data = await get_geolocation(client_ip)
             if geo_data and 'latitude' in geo_data and 'longitude' in geo_data:
                 support_centers = await get_support_centers_from_overpass(
@@ -257,7 +260,8 @@ async def predict_suicide_risk(request: PredictionRequest, client_ip: str = Depe
             "bert_risk_score": bert_risk_score if bert_risk_score is not None else "unavailable",
             "gemini_risk_score": gemini_risk_score,
             "model_status": "hybrid" if bert_risk_score is not None else "gemini_only",
-            "support_centers": support_centers
+            "support_centers": support_centers if location_consent else None,
+            "location_enabled": location_consent
         }
 
     except Exception as e:
