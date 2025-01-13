@@ -160,7 +160,7 @@
                             <optgroup label="Closest Centers">
                                 ${initialCenters.map((center, index) => `
                                     <option value="${index}">
-                                        ${center.name || 'Unknown'} (${formatDistance(center.distance)})
+                                        ${center.name || ''}
                                     </option>
                                 `).join('')}
                             </optgroup>
@@ -168,7 +168,7 @@
                                 <optgroup label="Additional Centers">
                                     ${remainingCenters.map((center, index) => `
                                         <option value="${index + 5}">
-                                            ${center.name || 'Unknown'} (${formatDistance(center.distance)})
+                                            ${center.name || ''}
                                         </option>
                                     `).join('')}
                                 </optgroup>
@@ -184,7 +184,7 @@
         window.selectCenter = (index) => {
             const center = allSupportCenters[parseInt(index)];
             // Put coordinates first in the search query for better accuracy
-            initMap(center.coordinates[1], center.coordinates[0], center.name || 'Support Center');
+            initMap(center.coordinates[1], center.coordinates[0], center.name || '');
         };
             
         const form = document.getElementById('riskForm');
