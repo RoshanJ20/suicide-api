@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any
 import concurrent.futures
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi import Depends, Request
 
 app = FastAPI()
 
@@ -188,6 +189,13 @@ async def get_gemini_response(prompt: str) -> Optional[str]:
     except Exception as e:
         print(f"Error calling Gemini API: {e}")
         return None
+    
+def get_client_ip(request: Request):
+    """Get client IP address from request headers"""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0]
+    return request.client.host
 
 
 app.mount("/templates", StaticFiles(directory="."), name="static")
@@ -198,7 +206,7 @@ async def serve_frontend():
     return FileResponse("index.html")
 
 @app.post("/predict")
-async def predict_suicide_risk(request: PredictionRequest):
+async def predict_suicide_risk(request: PredictionRequest, client_ip: str = Depends(get_client_ip)):
     try:
         input_text = request.text.strip()
         if not input_text:
@@ -231,17 +239,31 @@ async def predict_suicide_risk(request: PredictionRequest):
         else:
             combined_risk_score = gemini_risk_score
 
+        # Get geolocation data and support centers if risk is high
+        support_centers = []
+        print(client_ip)
+        if combined_risk_score > 0.5:
+            geo_data = await get_geolocation(client_ip)
+            print(geo_data)
+            if geo_data and 'latitude' in geo_data and 'longitude' in geo_data:
+                support_centers = await get_support_centers_from_overpass(
+                    float(geo_data['latitude']),
+                    float(geo_data['longitude'])
+                )
+
         return {
             "risk_score": combined_risk_score,
             "is_high_risk": combined_risk_score > 0.5,
             "bert_risk_score": bert_risk_score if bert_risk_score is not None else "unavailable",
             "gemini_risk_score": gemini_risk_score,
-            "model_status": "hybrid" if bert_risk_score is not None else "gemini_only"
+            "model_status": "hybrid" if bert_risk_score is not None else "gemini_only",
+            "support_centers": support_centers
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
+    
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
