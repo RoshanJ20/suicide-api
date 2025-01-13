@@ -150,7 +150,7 @@ async def get_geolocation(ip_address: str) -> Optional[Dict[str, Any]]:
         return None
 
 @lru_cache(maxsize=50)
-async def get_support_centers_from_overpass(lat: float, lon: float, radius: int = 5000) -> List[Dict[str, Any]]:
+async def get_support_centers_from_overpass(lat: float, lon: float, radius: int = 500) -> List[Dict[str, Any]]:
     try:
         api = overpass.API()
         query = f'node["amenity"~"hospital|clinic|doctors|social_facility|community_centre"](around:{radius},{lat},{lon});'
