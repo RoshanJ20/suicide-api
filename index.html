@@ -113,13 +113,8 @@
             // Clear previous map content
             mapDiv.innerHTML = '';
             
-            // Create the map URL with the location
-            // Only use coordinates if name is empty or unknown
-            const locationString = name && name.trim() ? 
-                `${lat},${lng} ${name}` : 
-                `${lat},${lng}`;
-            const searchQuery = encodeURIComponent(locationString);
-            const mapUrl = `https://maps.google.com/maps?q=${searchQuery}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
+            // Create the map URL with just coordinates
+            const mapUrl = `https://maps.google.com/maps?q=${lat},${lng}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
             
             // Create the iframe HTML
             const mapHTML = `
@@ -147,6 +142,13 @@
             mapContainer.classList.remove('hidden');
         }
 
+        function getCenterName(center, index) {
+            if (!center.name || center.name.trim().toLowerCase() === 'unknown') {
+                return `Support Center ${index + 1}`;
+            }
+            return center.name.trim();
+        }
+
         function renderSupportCentersDropdown(centers) {
             const initialCenters = centers.slice(0, 5);
             const remainingCenters = centers.slice(5);
@@ -163,7 +165,7 @@
                             <optgroup label="Closest Centers">
                                 ${initialCenters.map((center, index) => `
                                     <option value="${index}">
-                                        ${center.name?.trim() || 'Support Center Location'}
+                                        ${getCenterName(center, index)}
                                     </option>
                                 `).join('')}
                             </optgroup>
@@ -171,7 +173,7 @@
                                 <optgroup label="Additional Centers">
                                     ${remainingCenters.map((center, index) => `
                                         <option value="${index + 5}">
-                                            ${center.name?.trim() || 'Support Center Location'}
+                                            ${getCenterName(center, index + 5)}
                                         </option>
                                     `).join('')}
                                 </optgroup>
@@ -186,11 +188,9 @@
 
         window.selectCenter = (index) => {
             const center = allSupportCenters[parseInt(index)];
-            // Use default name if none provided
             initMap(
                 center.coordinates[1], 
-                center.coordinates[0], 
-                center.name?.trim() || 'Support Center Location'
+                center.coordinates[0]
             );
         };
             
