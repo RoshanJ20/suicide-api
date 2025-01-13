@@ -114,8 +114,11 @@
             mapDiv.innerHTML = '';
             
             // Create the map URL with the location
-            // Use both name and coordinates to ensure accurate placement
-            const searchQuery = encodeURIComponent(`${lat},${lng} ${name}`);
+            // Only use coordinates if name is empty or unknown
+            const locationString = name && name.trim() ? 
+                `${lat},${lng} ${name}` : 
+                `${lat},${lng}`;
+            const searchQuery = encodeURIComponent(locationString);
             const mapUrl = `https://maps.google.com/maps?q=${searchQuery}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
             
             // Create the iframe HTML
@@ -160,7 +163,7 @@
                             <optgroup label="Closest Centers">
                                 ${initialCenters.map((center, index) => `
                                     <option value="${index}">
-                                        ${center.name || ''}
+                                        ${center.name?.trim() || 'Support Center Location'}
                                     </option>
                                 `).join('')}
                             </optgroup>
@@ -168,7 +171,7 @@
                                 <optgroup label="Additional Centers">
                                     ${remainingCenters.map((center, index) => `
                                         <option value="${index + 5}">
-                                            ${center.name || ''}
+                                            ${center.name?.trim() || 'Support Center Location'}
                                         </option>
                                     `).join('')}
                                 </optgroup>
@@ -183,8 +186,12 @@
 
         window.selectCenter = (index) => {
             const center = allSupportCenters[parseInt(index)];
-            // Put coordinates first in the search query for better accuracy
-            initMap(center.coordinates[1], center.coordinates[0], center.name || '');
+            // Use default name if none provided
+            initMap(
+                center.coordinates[1], 
+                center.coordinates[0], 
+                center.name?.trim() || 'Support Center Location'
+            );
         };
             
         const form = document.getElementById('riskForm');
