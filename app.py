@@ -136,13 +136,13 @@ model_manager = ModelManager()
 @lru_cache(maxsize=100)
 async def get_geolocation(ip_address: str) -> Optional[Dict[str, Any]]:
     try:
-        async with asyncio.get_event_loop().run_in_executor(
+        response = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: requests.get(f'https://ipapi.co/{ip_address}/json/')
-        ) as response:
-            if response.status_code == 200:
-                return response.json()
-            return None
+        )
+        if response.status_code == 200:
+            return response.json()
+        return None
     except Exception as e:
         print(f"Geolocation lookup error: {e}")
         return None
