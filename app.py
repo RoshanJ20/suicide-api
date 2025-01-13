@@ -243,10 +243,8 @@ async def predict_suicide_risk(request: PredictionRequest, client_ip: str = Depe
 
         # Get geolocation data and support centers if risk is high
         support_centers = []
-        print(client_ip)
         if combined_risk_score > 0.5:
             geo_data = await get_geolocation(client_ip)
-            print(geo_data)
             if geo_data and 'latitude' in geo_data and 'longitude' in geo_data:
                 support_centers = await get_support_centers_from_overpass(
                     float(geo_data['latitude']),

@@ -2,225 +2,276 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Suicide Risk Assessment</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mental Health Assessment</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" rel="stylesheet">
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-            line-height: 1.6;
+        .gradient-background {
+            background: linear-gradient(120deg, #f0f9ff 0%, #e6f3ff 100%);
         }
-        .container {
-            background-color: #f4f4f4;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
-        textarea {
+        .transition-all {
+            transition: all 0.3s ease;
+        }
+        textarea:focus, select:focus {
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
+            outline: none;
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #3498db;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #map {
+            height: 400px;
             width: 100%;
-            height: 200px;
-            margin-bottom: 15px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            border-radius: 0.5rem;
         }
-        button {
-            background-color: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
+        .select-wrapper {
+            position: relative;
         }
-        button:hover {
-            background-color: #0056b3;
-        }
-        button:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-        }
-        #result {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #e9ecef;
-            border-radius: 4px;
-        }
-        .high-risk {
-            color: red;
-            font-weight: bold;
-        }
-        iframe {
-            width: 100%;
-            height: 300px;
-            border: 0;
-            margin-top: 15px;
-        }
-        select {
-            width: 100%;
-            padding: 10px;
-            margin-top: 10px;
-            margin-bottom: 15px;
-            border-radius: 4px;
-            border: 1px solid #ddd;
-        }
-        .loading {
-            display: none;
-            text-align: center;
-            margin: 10px 0;
-        }
-        .error-message {
-            color: red;
-            padding: 10px;
-            margin: 10px 0;
-            border: 1px solid red;
-            border-radius: 4px;
-            background-color: #ffe6e6;
+        .select-wrapper::after {
+            content: '▼';
+            font-size: 0.8em;
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6b7280;
+            pointer-events: none;
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>Suicide Risk Assessment</h1>
-        <form id="riskForm">
-            <textarea 
-                id="textInput" 
-                placeholder="Enter text for assessment. Please be honest and detailed."
-                required
-            ></textarea>
-            <button type="submit" id="submitButton">Check Risk</button>
-            <div id="loading" class="loading">Processing...</div>
-        </form>
-        <div id="result"></div>
-        <div id="map"></div>
+<body class="gradient-background min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-3xl">
+        <div class="bg-white rounded-lg card-shadow p-6 mb-8">
+            <h1 class="text-2xl font-semibold text-gray-800 mb-2">Mental Health Assessment</h1>
+            <p class="text-gray-600 mb-6">Your responses are private and confidential. We're here to help you find the support you need.</p>
+            
+            <form id="riskForm" class="space-y-6">
+                <div>
+                    <textarea 
+                        id="textInput"
+                        class="w-full h-48 p-4 border border-gray-300 rounded-lg resize-none transition-all focus:border-blue-500"
+                        placeholder="Please share what's on your mind. Your thoughts matter, and we're here to listen..."
+                        required
+                    ></textarea>
+                </div>
+                
+                <div class="flex items-center justify-between">
+                    <button 
+                        type="submit" 
+                        id="submitButton"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg transition-all transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
+                    >
+                        Get Support
+                    </button>
+                    <div id="loading" class="hidden">
+                        <div class="loading-spinner mr-3"></div>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <div id="result" class="space-y-6"></div>
+        <div id="mapContainer" class="mt-6">
+            <div id="map" class="hidden"></div>
+        </div>
     </div>
 
     <script>
-        // Determine API URL based on environment
         const API_URL = window.location.hostname === 'localhost' 
-            ? 'http://localhost:5000'
-            : window.location.origin;
+        ? 'http://localhost:5000'
+        : window.location.origin;
 
+        let map = null;
+        let currentMarker = null;
+        let allSupportCenters = [];
+
+        function formatDistance(meters) {
+            if (meters < 1000) {
+                return `${Math.round(meters)}m`;
+            }
+            return `${(meters / 1000).toFixed(1)}km`;
+        }
+
+        function initMap(lat, lng, name) {
+            const mapContainer = document.getElementById('mapContainer');
+            const mapDiv = document.getElementById('map');
+            
+            // Clear previous map content
+            mapDiv.innerHTML = '';
+            
+            // Create the map URL with the location
+            // Use both name and coordinates to ensure accurate placement
+            const searchQuery = encodeURIComponent(`${lat},${lng} ${name}`);
+            const mapUrl = `https://maps.google.com/maps?q=${searchQuery}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
+            
+            // Create the iframe HTML
+            const mapHTML = `
+                <div class="mapouter">
+                    <div class="gmap_canvas">
+                        <iframe 
+                            width="100%" 
+                            height="400" 
+                            id="gmap_canvas" 
+                            src="${mapUrl}"
+                            frameborder="0" 
+                            scrolling="no" 
+                            marginheight="0" 
+                            marginwidth="0"
+                            style="border-radius: 0.5rem;"
+                            allow="geolocation"
+                        ></iframe>
+                    </div>
+                </div>
+            `;
+            
+            // Update the map div and show it
+            mapDiv.innerHTML = mapHTML;
+            mapDiv.classList.remove('hidden');
+            mapContainer.classList.remove('hidden');
+        }
+
+        function renderSupportCentersDropdown(centers) {
+            const initialCenters = centers.slice(0, 5);
+            const remainingCenters = centers.slice(5);
+            
+            let dropdownHTML = `
+                <div class="mt-6">
+                    <h3 class="text-lg font-medium text-gray-800 mb-4">Nearest Support Centers</h3>
+                    <div class="select-wrapper">
+                        <select 
+                            id="centerSelect" 
+                            class="w-full p-3 pr-8 border border-gray-300 rounded-lg bg-white appearance-none cursor-pointer"
+                            onchange="selectCenter(this.value)"
+                        >
+                            <optgroup label="Closest Centers">
+                                ${initialCenters.map((center, index) => `
+                                    <option value="${index}">
+                                        ${center.name || 'Unknown'} (${formatDistance(center.distance)})
+                                    </option>
+                                `).join('')}
+                            </optgroup>
+                            ${remainingCenters.length > 0 ? `
+                                <optgroup label="Additional Centers">
+                                    ${remainingCenters.map((center, index) => `
+                                        <option value="${index + 5}">
+                                            ${center.name || 'Unknown'} (${formatDistance(center.distance)})
+                                        </option>
+                                    `).join('')}
+                                </optgroup>
+                            ` : ''}
+                        </select>
+                    </div>
+                </div>
+            `;
+
+            return dropdownHTML;
+        }
+
+        window.selectCenter = (index) => {
+            const center = allSupportCenters[parseInt(index)];
+            // Put coordinates first in the search query for better accuracy
+            initMap(center.coordinates[1], center.coordinates[0], center.name || 'Support Center');
+        };
+            
         const form = document.getElementById('riskForm');
         const submitButton = document.getElementById('submitButton');
         const loadingDiv = document.getElementById('loading');
         const resultDiv = document.getElementById('result');
-        const mapDiv = document.getElementById('map');
-
+    
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
-            // Disable form and show loading state
             submitButton.disabled = true;
-            loadingDiv.style.display = 'block';
+            loadingDiv.classList.remove('hidden');
             resultDiv.innerHTML = '';
-            mapDiv.innerHTML = '';
-
-            const textInput = document.getElementById('textInput').value;
-
+            document.getElementById('mapContainer').classList.add('hidden');
+    
             try {
                 const response = await fetch(`${API_URL}/predict`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ text: textInput }),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: document.getElementById('textInput').value }),
                 });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
+    
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
-
+    
                 let resultHTML = `
-                    <h2>Assessment Results</h2>
-                    <p><strong>Risk Score:</strong> ${(data.risk_score * 100).toFixed(1)}%</p>
-                    <p><strong>Risk Level:</strong> ${data.is_high_risk ? '<span class="high-risk">High</span>' : 'Low'}</p>
+                    <div class="bg-white rounded-lg card-shadow p-6">
+                        <h2 class="text-xl font-semibold text-gray-800 mb-4">Assessment Results</h2>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                                <span class="text-gray-700">Risk Level</span>
+                                <span class="${data.is_high_risk ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold'}">
+                                    ${data.is_high_risk ? 'High' : 'Low'}
+                                </span>
+                            </div>
+                        </div>
                 `;
-
+    
                 if (data.is_high_risk) {
                     resultHTML += `
-                        <div style="color: red; margin-top: 15px;">
-                            <strong>Important:</strong> 
-                            Based on the assessment, professional support is recommended.
-                            Please reach out to a mental health professional or a crisis helpline.
+                        <div class="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                            <div class="flex items-start">
+                                <svg class="w-6 h-6 text-red-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                </svg>
+                                <div>
+                                    <h3 class="text-red-800 font-medium">Important Notice</h3>
+                                    <p class="text-red-700 mt-1">Based on your responses, we strongly recommend speaking with a mental health professional. Help is available 24/7.</p>
+                                </div>
+                            </div>
                         </div>
                     `;
                 }
-
-                // Generate dropdown for support centers
-                if (data.support_centers && data.support_centers.length > 0) {
-                    resultHTML += `
-                        <h3>Nearby Support Centers</h3>
-                        <label for="supportCenterSelect">Select a Support Center:</label>
-                        <select id="supportCenterSelect">
-                            ${data.support_centers.map((center, index) => `
-                                <option value="${index}">
-                                    ${center.name || 'Unknown'} ${center.address ? `- ${center.address}` : ''}
-                                </option>
-                            `).join('')}
-                        </select>
-                    `;
-
-                    // Add center details section
-                    resultHTML += '<div id="centerDetails"></div>';
-                } else if (data.is_high_risk) {
-                    resultHTML += `
-                        <p>No local support centers found in your area. 
-                        Please call your country's emergency services or suicide prevention hotline.</p>
-                    `;
+    
+                if (data.support_centers?.length > 0) {
+                    allSupportCenters = data.support_centers;
+                    resultHTML += renderSupportCentersDropdown(allSupportCenters);
                 }
-
+    
+                resultHTML += '</div>';
                 resultDiv.innerHTML = resultHTML;
-
-                // Handle map rendering and center details
-                if (data.support_centers && data.support_centers.length > 0) {
-                    const supportCenterSelect = document.getElementById('supportCenterSelect');
-                    const centerDetailsDiv = document.getElementById('centerDetails');
-                    
-                    function updateCenterDetails(center) {
-                        let detailsHTML = '<div style="margin-top: 15px;">';
-                        if (center.phone) detailsHTML += `<p><strong>Phone:</strong> ${center.phone}</p>`;
-                        if (center.email) detailsHTML += `<p><strong>Email:</strong> ${center.email}</p>`;
-                        if (center.website) detailsHTML += `<p><strong>Website:</strong> <a href="${center.website}" target="_blank">${center.website}</a></p>`;
-                        detailsHTML += '</div>';
-                        
-                        centerDetailsDiv.innerHTML = detailsHTML;
-                        
-                        mapDiv.innerHTML = `
-                            <iframe
-                                src="https://www.google.com/maps?q=${center.coordinates[1]},${center.coordinates[0]}&z=15&output=embed"
-                                allowfullscreen
-                            ></iframe>
-                        `;
-                    }
-
-                    // Initialize with first center
-                    updateCenterDetails(data.support_centers[0]);
-
-                    // Update when selection changes
-                    supportCenterSelect.addEventListener('change', (event) => {
-                        const selectedCenter = data.support_centers[event.target.value];
-                        updateCenterDetails(selectedCenter);
-                    });
+    
+                if (allSupportCenters.length > 0) {
+                    selectCenter(0); // Show first center by default
                 }
-
+    
             } catch (error) {
                 resultDiv.innerHTML = `
-                    <div class="error-message">
-                        An error occurred while processing your request. 
-                        Please try again later.
-                        ${error.message ? `<br>Error: ${error.message}` : ''}
+                    <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div class="flex">
+                            <svg class="w-6 h-6 text-red-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            <div>
+                                <h3 class="text-red-800 font-medium">Error</h3>
+                                <p class="text-red-700 mt-1">Unable to process your request. Please try again later.</p>
+                                ${error.message ? `<p class="text-red-600 text-sm mt-2">Details: ${error.message}</p>` : ''}
+                            </div>
+                        </div>
                     </div>
                 `;
                 console.error('Error:', error);
             } finally {
-                // Re-enable form and hide loading state
                 submitButton.disabled = false;
-                loadingDiv.style.display = 'none';
+                loadingDiv.classList.add('hidden');
             }
         });
     </script>
+    
 </body>
 </html>
