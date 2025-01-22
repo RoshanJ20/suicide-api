@@ -200,6 +200,45 @@ def get_client_ip(request: Request):
         return forwarded_for.split(",")[0]
     return request.client.host
 
+def combine_risk_scores(gemini_score: float, bert_score: Optional[float]) -> float:
+    """
+    Combines risk scores using exponential weighted moving average with 
+    dynamic confidence adjustments and non-linear scaling
+    """
+    if bert_score is None:
+        return gemini_score
+    
+    # Base weights favoring Gemini
+    base_weight_gemini = 0.8
+    base_weight_bert = 0.2
+    
+    # Apply sigmoid transformation to handle extreme values better
+    def sigmoid_scale(x: float) -> float:
+        return 1 / (1 + np.exp(-10 * (x - 0.5)))
+    
+    # Scale scores non-linearly
+    gemini_scaled = sigmoid_scale(gemini_score)
+    bert_scaled = sigmoid_scale(bert_score)
+    
+    # Calculate confidence based on score deviation
+    score_diff = abs(gemini_scaled - bert_scaled)
+    confidence_penalty = np.exp(-3 * score_diff)  # Reduces weight when models disagree
+    
+    # Adjust weights based on confidence
+    final_weight_gemini = base_weight_gemini * (1 + (1 - confidence_penalty) * 0.2)
+    final_weight_bert = base_weight_bert * confidence_penalty
+    
+    # Normalize weights
+    total_weight = final_weight_gemini + final_weight_bert
+    final_weight_gemini /= total_weight
+    final_weight_bert /= total_weight
+    
+    # Combine scores with adjusted weights
+    combined_score = (gemini_scaled * final_weight_gemini + 
+                     bert_scaled * final_weight_bert)
+    
+    return combined_score
+
 
 app.mount("/templates", StaticFiles(directory="."), name="static")
 
@@ -238,9 +277,7 @@ async def predict_suicide_risk(request: PredictionRequest, client_ip: str = Depe
 
         # Calculate combined risk score
         if bert_risk_score is not None:
-            weight_gemini = 0.8
-            weight_bert = 0.2
-            combined_risk_score = (gemini_risk_score * weight_gemini) + (bert_risk_score * weight_bert)
+            combined_risk_score = combine_risk_scores(gemini_risk_score, bert_risk_score)
         else:
             combined_risk_score = gemini_risk_score
 
