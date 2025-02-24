@@ -237,7 +237,7 @@ def combine_risk_scores(gemini_score: float, bert_score: Optional[float]) -> flo
     combined_score = (gemini_scaled * final_weight_gemini + 
                      bert_scaled * final_weight_bert)
     
-    return combined_score
+    return float(combined_score)
 
 
 app.mount("/templates", StaticFiles(directory="."), name="static")
